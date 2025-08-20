@@ -16,24 +16,6 @@ const db = new sqlite3.Database("./movies.db", (err) => {
 });
 
 // Create tables if they don’t exist
-db.run(`
-  CREATE TABLE IF NOT EXISTS movies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    actor TEXT,
-    actress TEXT,
-    director TEXT,
-    music_director TEXT,
-    year INTEGER
-  )
-`);
-db.run(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    score INTEGER DEFAULT 0
-  )
-`);
 
 // ✅ Fetch all movies
 app.get("/movies", (req, res) => {
@@ -43,22 +25,44 @@ app.get("/movies", (req, res) => {
   });
 });
 
+// ✅ Leaderboard
+app.get("/leaderboard", (req, res) => {
+  const query = `
+    SELECT id, username, score,
+    RANK() OVER (ORDER BY score DESC) as rank
+    FROM users ORDER BY score DESC LIMIT 10
+  `;
+  db.all(query, [], (err, rows) => {
+    if (err) return res.status(500).send("Failed to fetch leaderboard");
+    res.json(rows);
+  });
+});
+
+// ✅ Create user (idempotent)
 app.post("/create-user", (req, res) => {
   const { username, score } = req.body;
 
-  db.run(
-    "INSERT INTO users (username, score) VALUES (?, ?)",
-    [username, score || 0],
-    function (err) {
-      if (err) {
-        if (err.message.includes("UNIQUE constraint failed")) {
-          return res.status(400).json({ error: "Username already taken" });
-        }
-        return res.status(500).json({ error: "Database error" });
-      }
-      res.json({ userId: this.lastID });
+  // Check if username already exists
+  db.get("SELECT id FROM users WHERE username = ?", [username], (err, row) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+
+    if (row) {
+      // Username already exists → return existing ID
+      return res.json({ userId: row.id });
     }
-  );
+
+    // If not exists, insert new
+    db.run(
+      "INSERT INTO users (username, score) VALUES (?, ?)",
+      [username, score || 0],
+      function (err2) {
+        if (err2) {
+          return res.status(500).json({ error: "Database error" });
+        }
+        res.json({ userId: this.lastID });
+      }
+    );
+  });
 });
 
 // ✅ Update score
@@ -71,19 +75,6 @@ app.post("/update-score", (req, res) => {
   db.run(query, [score, userId], function (err) {
     if (err) return res.status(500).send("Failed to update score");
     res.status(200).send("Score updated successfully");
-  });
-});
-
-// ✅ Leaderboard
-app.get("/leaderboard", (req, res) => {
-  const query = `
-    SELECT username, score,
-    RANK() OVER (ORDER BY score DESC) as rank
-    FROM users ORDER BY score DESC LIMIT 10
-  `;
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).send("Failed to fetch leaderboard");
-    res.json(rows);
   });
 });
 
